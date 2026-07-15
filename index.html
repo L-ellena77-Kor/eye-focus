@@ -119,17 +119,17 @@ const SPRITE_COLORS={G:"#3fb56b",F:"#f3c9a0",K:"#2b2b3a",B:"#6b4fbf",Y:"#ffd23f"
 
 // ---- 3D 상수 ----
 const D_OF={normal:2.4, myopia:3.0, hyperopia:1.92};  // 안구 길이(망막 x)
-const DNORM=2.4, DOBJ=4.0, XIN=-3.2, R_POINT=0.78, R_LENS=0.6, HOBJ=0.72, WOBJ=0.6, CORRX=-1.15;
+const DNORM=2.4, DOBJ=4.0, XIN=-3.2, R_POINT=0.5, R_LENS=0.42, HOBJ=0.72, WOBJ=0.6, CORRX=-1.3;
 
 let mode="point", eye="normal", lensOn=false, lensT=0, curSharp=true;
 
 // ---- Three.js ----
 let scene,camera,renderer,glcanvas,three_ok=false;
-let eyeShell,lensMesh,screenMesh,corrLens,convexGeo,concaveGeo;
+let eyeShell,lensMesh,screenMesh,corrLens,convexGeo,concaveGeo,concaveLabel,convexLabel;
 let pSolid,pDashed,pBlurRing,pFocal;
 let objPlane,imgPlane,retinaBlurPlane,fSolid,fDashed;
 let sharpTex,blurTex;
-let az=0.9, el=0.20, dragging=false, lastPX=0, lastPY=0, viewAspect=16/9;
+let az=0.95, el=0.16, dragging=false, lastPX=0, lastPY=0, viewAspect=16/9;
 
 function makeSpriteCanvas(){
   const g=12, px=12, cv=document.createElement("canvas"); cv.width=g*px; cv.height=g*px;
@@ -148,17 +148,30 @@ function planeMat(tex,opacity){
   return new THREE.MeshBasicMaterial({map:tex,transparent:true,opacity:opacity,side:THREE.DoubleSide,depthWrite:false});
 }
 function makeLensGeometry(kind){
-  const Redge=0.72, N=20, pts=[];
-  if(kind==="convex"){                 // 볼록: 가운데 두껍고 둘레 얇음
-    const T=0.52, e=0.05;
-    for(let i=0;i<=N;i++){ const t=i/N; pts.push(new THREE.Vector2(Redge*t, e/2+(T/2-e/2)*Math.sqrt(Math.max(0,1-t*t)))); }
-    for(let i=0;i<=N;i++){ const t=1-i/N; pts.push(new THREE.Vector2(Redge*t, -(e/2+(T/2-e/2)*Math.sqrt(Math.max(0,1-t*t))))); }
-  }else{                                // 오목: 가운데 얇고 둘레 두꺼움
-    const c=0.05, E=0.52;
-    for(let i=0;i<=N;i++){ const t=i/N; pts.push(new THREE.Vector2(Redge*t, c/2+(E/2-c/2)*(t*t))); }
-    for(let i=0;i<=N;i++){ const t=1-i/N; pts.push(new THREE.Vector2(Redge*t, -(c/2+(E/2-c/2)*(t*t)))); }
+  const R=1.3, N=30, pts=[];
+  const sphereR=(depth)=>(R*R+depth*depth)/(2*depth);
+  const sag=(Rs,r)=>Rs-Math.sqrt(Math.max(0,Rs*Rs-r*r));
+  if(kind==="convex"){                 // 볼록: 양쪽 구면, 가운데가 두껍고 둘레가 얇음
+    const e=0.03, T=0.62, Rs=sphereR((T-e)/2), sR=sag(Rs,R);
+    const half=r=>e/2+(sR-sag(Rs,r));
+    for(let i=0;i<=N;i++){ const r=R*i/N; pts.push(new THREE.Vector2(r, half(r))); }
+    for(let i=0;i<=N;i++){ const r=R*(1-i/N); pts.push(new THREE.Vector2(r, -half(r))); }
+  }else{                                // 오목: 한쪽은 평면, 다른 쪽은 구면으로 파임 (실제 근시 안경알)
+    const c=0.03, E=0.62, Rs=sphereR(E-c);
+    const th=r=>c+sag(Rs,r);
+    for(let i=0;i<=N;i++){ const r=R*i/N; pts.push(new THREE.Vector2(r, E/2)); }            // 평평한 면
+    for(let i=0;i<=N;i++){ const r=R*(1-i/N); pts.push(new THREE.Vector2(r, E/2-th(r))); }  // 구면으로 파인 면
   }
-  return new THREE.LatheGeometry(pts, 48);
+  return new THREE.LatheGeometry(pts, 64);
+}
+function makeLabelSprite(text,color){
+  const c=document.createElement("canvas"); c.width=256; c.height=64;
+  const g=c.getContext("2d");
+  g.fillStyle="rgba(10,24,32,0.7)"; g.fillRect(0,0,256,64);
+  g.fillStyle=color; g.font="bold 34px sans-serif"; g.textAlign="center"; g.textBaseline="middle";
+  g.fillText(text,128,34);
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c),transparent:true,depthTest:false}));
+  sp.scale.set(1.0,0.25,1); return sp;
 }
 
 function init3D(){
@@ -180,7 +193,7 @@ function init3D(){
   scene.add(eyeShell);
   lensMesh=new THREE.Mesh(new THREE.SphereGeometry(1,28,20),
     new THREE.MeshBasicMaterial({color:0x6db3ff,transparent:true,opacity:0.42,depthWrite:false}));
-  lensMesh.scale.set(0.12,0.95,0.95); scene.add(lensMesh);
+  lensMesh.scale.set(0.05,0.62,0.62); scene.add(lensMesh);
   screenMesh=new THREE.Mesh(new THREE.CircleGeometry(1.05,48),
     new THREE.MeshBasicMaterial({color:0xff7f9a,transparent:true,opacity:0.16,side:THREE.DoubleSide,depthWrite:false}));
   screenMesh.rotation.y=Math.PI/2; scene.add(screenMesh);
@@ -190,8 +203,10 @@ function init3D(){
   scene.add(new THREE.AmbientLight(0xffffff,0.8));
   const dl=new THREE.DirectionalLight(0xffffff,0.7); dl.position.set(-3,4,5); scene.add(dl);
   convexGeo=makeLensGeometry("convex"); concaveGeo=makeLensGeometry("concave");
-  corrLens=new THREE.Mesh(convexGeo, new THREE.MeshPhongMaterial({color:0x7fc4ff,transparent:true,opacity:0.5,shininess:80,specular:0x557088,side:THREE.DoubleSide,depthWrite:false}));
+  corrLens=new THREE.Mesh(convexGeo, new THREE.MeshPhongMaterial({color:0x9ad4ff,transparent:true,opacity:0.7,shininess:90,specular:0x88aabb,side:THREE.DoubleSide,depthWrite:false}));
   corrLens.rotation.z=Math.PI/2; corrLens.position.x=CORRX; corrLens.frustumCulled=false; scene.add(corrLens);
+  concaveLabel=makeLabelSprite("오목 렌즈","#9ad4ff"); convexLabel=makeLabelSprite("볼록 렌즈","#9ad4ff");
+  for(const sp of [concaveLabel,convexLabel]){ sp.position.set(CORRX,1.62,0); sp.visible=false; scene.add(sp); }
 
   // 점 모드 그룹
   pSolid=new THREE.LineSegments(new THREE.BufferGeometry(),
@@ -245,7 +260,7 @@ function setSeg(line,arr){
   line.visible=arr.length>0;
 }
 function updateCamera(){
-  const tx=(mode==="point")?0.3:-0.5, H=(mode==="point")?4.6:5.0;
+  const tx=(mode==="point")?0.3:-0.5, H=(mode==="point")?5.2:5.6;
   camera.left=-H*viewAspect/2; camera.right=H*viewAspect/2; camera.top=H/2; camera.bottom=-H/2;
   camera.updateProjectionMatrix();
   const Rc=14;
@@ -272,7 +287,7 @@ function updatePoint(Dret){
   setSeg(pSolid,solid); setSeg(pDashed,dashed);
   if(curSharp){ pBlurRing.visible=false; }
   else{ const br=Math.max(Math.abs(R_POINT*(1-Dret/f)),0.001);
-    pBlurRing.geometry.dispose(); pBlurRing.geometry=new THREE.TorusGeometry(br,0.02,10,64);
+    pBlurRing.geometry.dispose(); pBlurRing.geometry=new THREE.TorusGeometry(br,0.028,10,64);
     pBlurRing.position.x=Dret; pBlurRing.visible=true; }
   pFocal.position.set(f,0,0); pFocal.material.color.set(curSharp?0x39d98a:(front?0xffc24d:0xff6a7a)); pFocal.visible=true;
 }
@@ -309,9 +324,12 @@ function update3D(){
   const Dret=D_OF[eye];
   eyeShell.scale.set(Dret/2+0.4,1.35,1.35); eyeShell.position.x=Dret/2;
   screenMesh.position.x=Dret;
-  if(eye==="normal"){ corrLens.visible=false; }
-  else{ corrLens.geometry=(eye==="myopia")?concaveGeo:convexGeo;
-    corrLens.visible=lensT>0.02; corrLens.material.opacity=clamp(lensT*0.6,0,0.6); }
+  const showLens=(eye!=="normal") && lensT>0.02;
+  corrLens.visible=showLens;
+  if(showLens){ corrLens.geometry=(eye==="myopia")?concaveGeo:convexGeo;
+    corrLens.material.opacity=clamp(lensT*0.75,0,0.75); }
+  concaveLabel.visible=showLens && eye==="myopia";
+  convexLabel.visible=showLens && eye==="hyperopia";
 
   if(mode==="point"){
     objPlane.visible=imgPlane.visible=retinaBlurPlane.visible=false;
@@ -366,7 +384,7 @@ function refreshLensControl(){
 }
 document.getElementById("tabs").addEventListener("click",e=>{
   const b=e.target.closest("button"); if(!b) return; mode=b.dataset.mode;
-  az=0.9; el=0.2;
+  az=(mode==="point")?0.95:1.30; el=0.16;
   [...e.currentTarget.children].forEach(c=>c.classList.toggle("active",c===b));
 });
 document.getElementById("eyeSeg").addEventListener("click",e=>{
