@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>근시·원시와 렌즈 교정 (3D)</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+  :root{ --ink:#1d2b33; --muted:#5b7480; --line:#dfe8ec; --panel:#f5f9fa;
+    --eye-deep:#2f9a9a; --ray:#ff8a1e; --ok:#1fae7a; --warn:#e8556b; }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:#fff;color:var(--ink);
+    font-family:"Pretendard","Apple SD Gothic Neo","Malgun Gothic",-apple-system,BlinkMacSystemFont,sans-serif;}
+  .wrap{max-width:960px;margin:0 auto;padding:16px 14px 40px;}
+  header h1{font-size:1.28rem;letter-spacing:-.02em;margin:2px 0 2px;}
+  header p{margin:0 0 12px;color:var(--muted);font-size:.9rem;}
+  .tabs{display:flex;gap:6px;background:var(--panel);border:1px solid var(--line);
+    border-radius:12px;padding:5px;margin-bottom:12px;}
+  .tabs button{flex:1;border:0;background:transparent;padding:11px 8px;border-radius:8px;
+    font-size:.95rem;font-weight:600;color:var(--muted);cursor:pointer;transition:.15s;}
+  .tabs button.active{background:#fff;color:var(--ink);box-shadow:0 1px 4px rgba(20,50,60,.12);}
+  .stage{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#0c1a22;}
+  #glwrap{position:relative;width:100%;background:#0c1a22;display:block;}
+  #gl{display:block;width:100%;height:100%;touch-action:none;cursor:grab;}
+  #gl:active{cursor:grabbing;}
+  .glhint{position:absolute;left:10px;bottom:8px;color:#8fc4d0;font-size:.72rem;
+    background:rgba(8,20,28,.55);padding:3px 9px;border-radius:8px;pointer-events:none;}
+  .controls{margin-top:14px;display:flex;flex-direction:column;gap:12px;}
+  .group{display:flex;flex-direction:column;gap:7px;}
+  .glabel{font-size:.78rem;font-weight:700;color:var(--muted);letter-spacing:.02em;}
+  .seg{display:flex;gap:8px;}
+  .seg button{flex:1;padding:12px 6px;border:1.5px solid var(--line);background:#fff;border-radius:10px;
+    font-size:.98rem;font-weight:600;color:var(--ink);cursor:pointer;transition:.15s;}
+  .seg button.active{border-color:var(--eye-deep);background:#eafafa;color:var(--eye-deep);}
+  .toggle{display:flex;align-items:center;justify-content:space-between;gap:12px;
+    border:1.5px solid var(--line);border-radius:10px;padding:12px 14px;}
+  .toggle .t-txt{font-size:.98rem;font-weight:600;}
+  .toggle .t-sub{font-size:.78rem;color:var(--muted);font-weight:500;margin-top:2px;}
+  .switch{position:relative;width:52px;height:30px;flex:0 0 auto;}
+  .switch input{opacity:0;width:0;height:0;}
+  .slider{position:absolute;inset:0;background:#cfdae0;border-radius:30px;transition:.2s;cursor:pointer;}
+  .slider::before{content:"";position:absolute;height:24px;width:24px;left:3px;top:3px;background:#fff;
+    border-radius:50%;transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.25);}
+  .switch input:checked + .slider{background:var(--eye-deep);}
+  .switch input:checked + .slider::before{transform:translateX(22px);}
+  .switch input:disabled + .slider{opacity:.4;cursor:not-allowed;}
+  .info{border:1px solid var(--line);background:var(--panel);border-radius:12px;padding:14px 16px;}
+  .info .status{display:inline-block;font-size:.76rem;font-weight:700;padding:3px 10px;border-radius:20px;margin-bottom:8px;}
+  .info .status.blur{background:#fde7ea;color:var(--warn);}
+  .info .status.sharp{background:#e2f7ef;color:var(--ok);}
+  .info p{margin:0;font-size:.95rem;line-height:1.6;}
+  .info p + p{margin-top:7px;color:var(--muted);}
+  .foot{margin-top:14px;font-size:.76rem;color:#9db0b8;line-height:1.5;}
+  @media (max-width:520px){ header h1{font-size:1.12rem;} .seg button{font-size:.9rem;padding:11px 4px;} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>근시·원시와 렌즈 교정 (3D)</h1>
+    <p>눈 속에서 빛이 어디에 모이는지 3D로 돌려 보며 관찰하세요.</p>
+  </header>
+
+  <div class="tabs" id="tabs">
+    <button data-mode="point" class="active">한 점의 초점</button>
+    <button data-mode="full">캐릭터 전체의 상</button>
+  </div>
+
+  <div class="stage">
+    <div id="glwrap"><canvas id="gl"></canvas>
+      <div class="glhint">드래그해서 3D로 돌려 보세요</div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="group">
+      <span class="glabel">눈 상태</span>
+      <div class="seg" id="eyeSeg">
+        <button data-eye="normal" class="active">정상</button>
+        <button data-eye="myopia">근시</button>
+        <button data-eye="hyperopia">원시</button>
+      </div>
+    </div>
+    <div class="toggle">
+      <div>
+        <div class="t-txt" id="lensLabel">교정 렌즈</div>
+        <div class="t-sub" id="lensSub">근시·원시일 때 렌즈를 씌워 초점을 맞춥니다</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="lensToggle" disabled>
+        <span class="slider"></span>
+      </label>
+    </div>
+    <div class="info">
+      <span class="status sharp" id="statusChip">또렷함</span>
+      <p id="infoMain"></p>
+      <p id="infoSub"></p>
+    </div>
+  </div>
+
+  <div class="foot">
+    한 점 모드: 먼 곳의 한 점에서 온 여러 평행한 빛이 한 점에 모이거나 퍼집니다.
+    전체 상 모드: 캐릭터의 머리끝·발끝에서 온 빛이 눈 속에 거꾸로 선 상을 만듭니다(정상=망막, 근시=망막 앞, 원시=망막 뒤).
+  </div>
+</div>
+
+<script>
+"use strict";
+const reduceMotion=window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+
+// ---- 오리지널 8비트 캐릭터 ----
+const SPRITE=[
+  "....GGGG....","...GGGGGG...","..GGGGGGGG..","..FFFFFFFF..",
+  "..FKFFFFKF..","..FFFFFFFF..","...FFFFFF...",".BBBBBBBBBB.",
+  ".BBBBYYBBBB.",".BBBBBBBBBB.","..BB.BB.BB..","..DD..DD...."
+];
+const SPRITE_COLORS={G:"#3fb56b",F:"#f3c9a0",K:"#2b2b3a",B:"#6b4fbf",Y:"#ffd23f",D:"#3a4a5a"};
+
+// ---- 3D 상수 ----
+const D_OF={normal:2.4, myopia:3.0, hyperopia:1.92};  // 안구 길이(망막 x)
+const DNORM=2.4, DOBJ=4.0, XIN=-3.2, R_POINT=0.78, R_LENS=0.6, HOBJ=0.72, WOBJ=0.6, CORRX=-1.15;
+
+let mode="point", eye="normal", lensOn=false, lensT=0, curSharp=true;
+
+// ---- Three.js ----
+let scene,camera,renderer,glcanvas,three_ok=false;
+let eyeShell,lensMesh,screenMesh,corrLens,convexGeo,concaveGeo;
+let pSolid,pDashed,pBlurRing,pFocal;
+let objPlane,imgPlane,retinaBlurPlane,fSolid,fDashed;
+let sharpTex,blurTex;
+let az=0.9, el=0.20, dragging=false, lastPX=0, lastPY=0, viewAspect=16/9;
+
+function makeSpriteCanvas(){
+  const g=12, px=12, cv=document.createElement("canvas"); cv.width=g*px; cv.height=g*px;
+  const c=cv.getContext("2d");
+  for(let r=0;r<g;r++) for(let col=0;col<g;col++){
+    const ch=SPRITE[r][col]; if(ch==="."||ch===" ") continue;
+    c.fillStyle=SPRITE_COLORS[ch]||"#000"; c.fillRect(col*px,r*px,px,px);
+  }
+  return cv;
+}
+function makeBlurCanvas(src){
+  const c=document.createElement("canvas"); c.width=src.width; c.height=src.height;
+  const g=c.getContext("2d"); g.filter="blur(6px)"; g.drawImage(src,0,0); return c;
+}
+function planeMat(tex,opacity){
+  return new THREE.MeshBasicMaterial({map:tex,transparent:true,opacity:opacity,side:THREE.DoubleSide,depthWrite:false});
+}
+function makeLensGeometry(kind){
+  const Redge=0.72, N=20, pts=[];
+  if(kind==="convex"){                 // 볼록: 가운데 두껍고 둘레 얇음
+    const T=0.52, e=0.05;
+    for(let i=0;i<=N;i++){ const t=i/N; pts.push(new THREE.Vector2(Redge*t, e/2+(T/2-e/2)*Math.sqrt(Math.max(0,1-t*t)))); }
+    for(let i=0;i<=N;i++){ const t=1-i/N; pts.push(new THREE.Vector2(Redge*t, -(e/2+(T/2-e/2)*Math.sqrt(Math.max(0,1-t*t))))); }
+  }else{                                // 오목: 가운데 얇고 둘레 두꺼움
+    const c=0.05, E=0.52;
+    for(let i=0;i<=N;i++){ const t=i/N; pts.push(new THREE.Vector2(Redge*t, c/2+(E/2-c/2)*(t*t))); }
+    for(let i=0;i<=N;i++){ const t=1-i/N; pts.push(new THREE.Vector2(Redge*t, -(c/2+(E/2-c/2)*(t*t)))); }
+  }
+  return new THREE.LatheGeometry(pts, 48);
+}
+
+function init3D(){
+  const wrap=document.getElementById("glwrap");
+  if(typeof THREE==="undefined"){
+    wrap.innerHTML='<div style="color:#9fc2cc;padding:26px;font-size:.9rem;line-height:1.6">3D 보기를 불러오지 못했습니다. 인터넷 연결이 필요합니다.</div>';
+    updateInfo(); return;
+  }
+  glcanvas=document.getElementById("gl");
+  renderer=new THREE.WebGLRenderer({canvas:glcanvas, antialias:true});
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+  renderer.setClearColor(0x0c1a22,1);
+  scene=new THREE.Scene();
+  camera=new THREE.OrthographicCamera(-1,1,1,-1,0.1,100);
+
+  // 공통: 눈알 / 수정체 / 망막 스크린 / 축 / 교정 렌즈
+  eyeShell=new THREE.Mesh(new THREE.SphereGeometry(1,40,28),
+    new THREE.MeshBasicMaterial({color:0x63c7c7,transparent:true,opacity:0.10,side:THREE.DoubleSide,depthWrite:false}));
+  scene.add(eyeShell);
+  lensMesh=new THREE.Mesh(new THREE.SphereGeometry(1,28,20),
+    new THREE.MeshBasicMaterial({color:0x6db3ff,transparent:true,opacity:0.42,depthWrite:false}));
+  lensMesh.scale.set(0.12,0.95,0.95); scene.add(lensMesh);
+  screenMesh=new THREE.Mesh(new THREE.CircleGeometry(1.05,48),
+    new THREE.MeshBasicMaterial({color:0xff7f9a,transparent:true,opacity:0.16,side:THREE.DoubleSide,depthWrite:false}));
+  screenMesh.rotation.y=Math.PI/2; scene.add(screenMesh);
+  scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(
+    [new THREE.Vector3(-4.4,0,0),new THREE.Vector3(4.2,0,0)]),
+    new THREE.LineBasicMaterial({color:0x2b4a55})));
+  scene.add(new THREE.AmbientLight(0xffffff,0.8));
+  const dl=new THREE.DirectionalLight(0xffffff,0.7); dl.position.set(-3,4,5); scene.add(dl);
+  convexGeo=makeLensGeometry("convex"); concaveGeo=makeLensGeometry("concave");
+  corrLens=new THREE.Mesh(convexGeo, new THREE.MeshPhongMaterial({color:0x7fc4ff,transparent:true,opacity:0.5,shininess:80,specular:0x557088,side:THREE.DoubleSide,depthWrite:false}));
+  corrLens.rotation.z=Math.PI/2; corrLens.position.x=CORRX; corrLens.frustumCulled=false; scene.add(corrLens);
+
+  // 점 모드 그룹
+  pSolid=new THREE.LineSegments(new THREE.BufferGeometry(),
+    new THREE.LineBasicMaterial({color:0xff9a3c,transparent:true,opacity:0.95,blending:THREE.AdditiveBlending}));
+  pSolid.frustumCulled=false; scene.add(pSolid);
+  pDashed=new THREE.LineSegments(new THREE.BufferGeometry(),
+    new THREE.LineDashedMaterial({color:0xff6a7a,transparent:true,opacity:0.9,dashSize:0.07,gapSize:0.05}));
+  pDashed.frustumCulled=false; scene.add(pDashed);
+  pBlurRing=new THREE.Mesh(new THREE.TorusGeometry(0.2,0.02,10,64),
+    new THREE.MeshBasicMaterial({color:0xff5a6e}));
+  pBlurRing.rotation.y=Math.PI/2; pBlurRing.frustumCulled=false; scene.add(pBlurRing);
+  pFocal=new THREE.Mesh(new THREE.SphereGeometry(0.065,16,12),
+    new THREE.MeshBasicMaterial({color:0x39d98a})); scene.add(pFocal);
+
+  // 텍스처 + 전체 상 그룹
+  const sc=makeSpriteCanvas();
+  sharpTex=new THREE.CanvasTexture(sc); sharpTex.magFilter=THREE.NearestFilter; sharpTex.minFilter=THREE.LinearFilter;
+  blurTex=new THREE.CanvasTexture(makeBlurCanvas(sc));
+  const unit=new THREE.PlaneGeometry(1,1);
+  objPlane=new THREE.Mesh(unit, planeMat(sharpTex,0.98)); objPlane.rotation.y=Math.PI/2; objPlane.frustumCulled=false; scene.add(objPlane);
+  imgPlane=new THREE.Mesh(unit, planeMat(sharpTex,0.95)); imgPlane.rotation.y=Math.PI/2; imgPlane.frustumCulled=false; scene.add(imgPlane);
+  retinaBlurPlane=new THREE.Mesh(unit, planeMat(blurTex,0.6)); retinaBlurPlane.rotation.y=Math.PI/2; retinaBlurPlane.frustumCulled=false; scene.add(retinaBlurPlane);
+  fSolid=new THREE.LineSegments(new THREE.BufferGeometry(),
+    new THREE.LineBasicMaterial({color:0xff9a3c,transparent:true,opacity:0.9,blending:THREE.AdditiveBlending}));
+  fSolid.frustumCulled=false; scene.add(fSolid);
+  fDashed=new THREE.LineSegments(new THREE.BufferGeometry(),
+    new THREE.LineDashedMaterial({color:0xff6a7a,transparent:true,opacity:0.85,dashSize:0.06,gapSize:0.05}));
+  fDashed.frustumCulled=false; scene.add(fDashed);
+
+  glcanvas.addEventListener("pointerdown",e=>{dragging=true;lastPX=e.clientX;lastPY=e.clientY;});
+  window.addEventListener("pointermove",e=>{ if(!dragging)return;
+    az-=(e.clientX-lastPX)*0.008; el=clamp(el+(e.clientY-lastPY)*0.008,-1.15,1.15);
+    lastPX=e.clientX; lastPY=e.clientY; });
+  window.addEventListener("pointerup",()=>{dragging=false;});
+  window.addEventListener("resize",resize3D);
+  three_ok=true; resize3D();
+}
+function resize3D(){
+  if(!three_ok) return;
+  const wrap=document.getElementById("glwrap");
+  const w=wrap.clientWidth||600, h=Math.round(w*9/16);
+  wrap.style.height=h+"px";
+  renderer.setSize(w,h,false); viewAspect=w/h;
+}
+function setSeg(line,arr){
+  line.geometry.dispose();
+  const g=new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(arr,3));
+  line.geometry=g;
+  if(line.material.isLineDashedMaterial) line.computeLineDistances();
+  line.visible=arr.length>0;
+}
+function updateCamera(){
+  const tx=(mode==="point")?0.3:-0.5, H=(mode==="point")?4.6:5.0;
+  camera.left=-H*viewAspect/2; camera.right=H*viewAspect/2; camera.top=H/2; camera.bottom=-H/2;
+  camera.updateProjectionMatrix();
+  const Rc=14;
+  camera.position.set(tx+Rc*Math.cos(el)*Math.cos(az), Rc*Math.sin(el), Rc*Math.cos(el)*Math.sin(az));
+  camera.up.set(0,1,0); camera.lookAt(tx,0,0);
+}
+
+// ---- 점 모드 ----
+function updatePoint(Dret){
+  const f=1/((1-lensT)/DNORM + lensT/Dret);
+  const front=f<Dret-0.02, behind=f>Dret+0.02; curSharp=!front&&!behind;
+  const solid=[], dashed=[];
+  const pushRay=(rad,th)=>{
+    const c=Math.cos(th), s=Math.sin(th), rr=rad*(1-Dret/f);
+    const p0=[XIN,rad*c,rad*s], pL=[0,rad*c,rad*s], pF=[f,0,0], pR=[Dret,rr*c,rr*s];
+    solid.push(p0[0],p0[1],p0[2], pL[0],pL[1],pL[2]);           // 평행 입사(축과 나란)
+    if(front){ solid.push(pL[0],pL[1],pL[2], pF[0],pF[1],pF[2], pF[0],pF[1],pF[2], pR[0],pR[1],pR[2]); }
+    else if(behind){ solid.push(pL[0],pL[1],pL[2], pR[0],pR[1],pR[2]); dashed.push(pR[0],pR[1],pR[2], pF[0],pF[1],pF[2]); }
+    else { solid.push(pL[0],pL[1],pL[2], pR[0],pR[1],pR[2]); }
+  };
+  const rings=[[R_POINT,22],[R_POINT*0.62,10]];   // 바깥 고리 + 안쪽 고리
+  for(const rg of rings){ for(let i=0;i<rg[1];i++) pushRay(rg[0], i/rg[1]*Math.PI*2); }
+  pushRay(0,0);                                    // 중심(축) 광선
+  setSeg(pSolid,solid); setSeg(pDashed,dashed);
+  if(curSharp){ pBlurRing.visible=false; }
+  else{ const br=Math.max(Math.abs(R_POINT*(1-Dret/f)),0.001);
+    pBlurRing.geometry.dispose(); pBlurRing.geometry=new THREE.TorusGeometry(br,0.02,10,64);
+    pBlurRing.position.x=Dret; pBlurRing.visible=true; }
+  pFocal.position.set(f,0,0); pFocal.material.color.set(curSharp?0x39d98a:(front?0xffc24d:0xff6a7a)); pFocal.visible=true;
+}
+
+// ---- 전체 상 모드 ----
+function updateFull(Dret){
+  const ximg=(1-lensT)*DNORM + lensT*Dret;
+  const m=ximg/DOBJ;
+  const behind=ximg>Dret+0.02, front=ximg<Dret-0.02; curSharp=!behind&&!front;
+
+  objPlane.position.set(-DOBJ,0,0); objPlane.scale.set(WOBJ*2, HOBJ*2, 1); objPlane.visible=true;
+  imgPlane.position.set(ximg,0,0); imgPlane.scale.set(WOBJ*2*m, -(HOBJ*2*m), 1);
+  imgPlane.material.opacity=behind?0.5:0.95; imgPlane.visible=true;
+  if(curSharp){ retinaBlurPlane.visible=false; }
+  else{ const bs=1.3; retinaBlurPlane.position.set(Dret,0,0);
+    retinaBlurPlane.scale.set(WOBJ*2*m*bs, -(HOBJ*2*m*bs), 1); retinaBlurPlane.visible=true; }
+
+  const solid=[], dashed=[], NL=12, R=R_LENS, Ho=HOBJ, t=Dret/ximg;
+  const pts=[{oy:+Ho, iy:-m*Ho},{oy:-Ho, iy:+m*Ho}];
+  for(const p of pts){
+    const O=[-DOBJ,p.oy,0], I=[ximg,p.iy,0];
+    for(let k=0;k<NL;k++){
+      const ph=k/NL*Math.PI*2, Lp=[0,R*Math.cos(ph),R*Math.sin(ph)];
+      const Rp=[Lp[0]+t*(I[0]-Lp[0]), Lp[1]+t*(I[1]-Lp[1]), Lp[2]+t*(I[2]-Lp[2])];
+      solid.push(O[0],O[1],O[2], Lp[0],Lp[1],Lp[2], Lp[0],Lp[1],Lp[2], Rp[0],Rp[1],Rp[2]);
+      if(behind) dashed.push(Rp[0],Rp[1],Rp[2], I[0],I[1],I[2]);
+    }
+  }
+  setSeg(fSolid,solid); setSeg(fDashed,dashed);
+}
+
+function update3D(){
+  if(!three_ok) return;
+  const Dret=D_OF[eye];
+  eyeShell.scale.set(Dret/2+0.4,1.35,1.35); eyeShell.position.x=Dret/2;
+  screenMesh.position.x=Dret;
+  if(eye==="normal"){ corrLens.visible=false; }
+  else{ corrLens.geometry=(eye==="myopia")?concaveGeo:convexGeo;
+    corrLens.visible=lensT>0.02; corrLens.material.opacity=clamp(lensT*0.6,0,0.6); }
+
+  if(mode==="point"){
+    objPlane.visible=imgPlane.visible=retinaBlurPlane.visible=false;
+    fSolid.visible=fDashed.visible=false;
+    updatePoint(Dret);
+  }else{
+    pSolid.visible=pDashed.visible=pBlurRing.visible=pFocal.visible=false;
+    updateFull(Dret);
+  }
+  updateCamera();
+  renderer.render(scene,camera);
+  updateInfo();
+}
+
+// ---- 설명 ----
+function updateInfo(){
+  const chip=document.getElementById("statusChip");
+  const main=document.getElementById("infoMain"), sub=document.getElementById("infoSub");
+  chip.textContent=curSharp?"또렷함":"흐릿함"; chip.className="status "+(curSharp?"sharp":"blur");
+  let m="",s="";
+  if(mode==="point"){
+    if(eye==="normal"){ m="정상 눈: 먼 곳 한 점에서 온 평행한 빛이 망막의 한 점으로 정확히 모입니다."; s="빛이 한 점에 모여 또렷합니다."; }
+    else if(eye==="myopia"){
+      if(lensOn){ m="오목 렌즈로 교정: 초점을 뒤로 밀어 망막의 한 점에 모읍니다."; s="퍼지던 빛이 다시 한 점으로 모입니다."; }
+      else{ m="근시: 초점이 망막 앞에 맺히고, 망막에서는 빛이 고리처럼 퍼집니다. 안구가 길기 때문입니다."; s="오목 렌즈로 초점을 뒤로 밀면 한 점이 됩니다."; }
+    }else{
+      if(lensOn){ m="볼록 렌즈로 교정: 초점을 앞으로 당겨 망막의 한 점에 모읍니다."; s="퍼지던 빛이 다시 한 점으로 모입니다."; }
+      else{ m="원시: 초점이 망막 뒤(점선으로 연장)에 맺히려 해, 망막에서는 빛이 고리처럼 퍼집니다. 안구가 짧기 때문입니다."; s="볼록 렌즈로 초점을 앞으로 당기면 한 점이 됩니다."; }
+    }
+  }else{
+    if(eye==="normal"){ m="정상 눈: 머리끝·발끝의 빛이 망막 위에 거꾸로 선 전체 상으로 또렷하게 맺힙니다."; s="상이 망막에 맺혀 또렷합니다."; }
+    else if(eye==="myopia"){
+      if(lensOn){ m="오목 렌즈로 교정: 거꾸로 선 상이 망막 위로 옮겨져 또렷해집니다."; s="망막에 퍼져 있던 상이 또렷해집니다."; }
+      else{ m="근시: 거꾸로 선 상이 망막보다 앞에 맺히고, 망막에는 흐릿하게 퍼집니다. 안구가 길기 때문입니다."; s="오목 렌즈로 상을 망막 위로 밀면 또렷해집니다."; }
+    }else{
+      if(lensOn){ m="볼록 렌즈로 교정: 거꾸로 선 상이 망막 위로 당겨져 또렷해집니다."; s="망막에 퍼져 있던 상이 또렷해집니다."; }
+      else{ m="원시: 거꾸로 선 상이 망막보다 뒤에 맺히려 하고(점선), 망막에는 흐릿하게 퍼집니다. 안구가 짧기 때문입니다."; s="볼록 렌즈로 상을 망막 위로 당기면 또렷해집니다."; }
+    }
+  }
+  main.textContent=m; sub.textContent=s;
+}
+
+// ---- 컨트롤 ----
+function refreshLensControl(){
+  const toggle=document.getElementById("lensToggle"),
+        label=document.getElementById("lensLabel"), sub=document.getElementById("lensSub");
+  if(eye==="normal"){ toggle.disabled=true; toggle.checked=false; lensOn=false;
+    label.textContent="교정 렌즈"; sub.textContent="정상 눈은 교정 렌즈가 필요 없습니다"; }
+  else{ toggle.disabled=false;
+    label.textContent=eye==="myopia"?"오목 렌즈 씌우기":"볼록 렌즈 씌우기";
+    sub.textContent=eye==="myopia"?"초점을 뒤로 밀어 망막에 맞춥니다":"초점을 앞으로 당겨 망막에 맞춥니다"; }
+}
+document.getElementById("tabs").addEventListener("click",e=>{
+  const b=e.target.closest("button"); if(!b) return; mode=b.dataset.mode;
+  az=0.9; el=0.2;
+  [...e.currentTarget.children].forEach(c=>c.classList.toggle("active",c===b));
+});
+document.getElementById("eyeSeg").addEventListener("click",e=>{
+  const b=e.target.closest("button"); if(!b) return; eye=b.dataset.eye;
+  [...e.currentTarget.children].forEach(c=>c.classList.toggle("active",c===b));
+  refreshLensControl();
+});
+document.getElementById("lensToggle").addEventListener("change",e=>{ lensOn=e.target.checked; });
+
+function lensTarget(){ return (lensOn && eye!=="normal")?1:0; }
+function loop(){
+  const tgt=lensTarget();
+  lensT += reduceMotion ? (tgt-lensT) : (tgt-lensT)*0.16;
+  if(three_ok) update3D(); else updateInfo();
+  requestAnimationFrame(loop);
+}
+refreshLensControl();
+init3D();
+lensT=lensTarget();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
