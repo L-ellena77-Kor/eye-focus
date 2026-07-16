@@ -12,8 +12,11 @@
   html,body{margin:0;padding:0;background:#fff;color:var(--ink);
     font-family:"Pretendard","Apple SD Gothic Neo","Malgun Gothic",-apple-system,BlinkMacSystemFont,sans-serif;}
   .wrap{max-width:960px;margin:0 auto;padding:16px 14px 40px;}
-  header h1{font-size:1.28rem;letter-spacing:-.02em;margin:2px 0 2px;}
-  header p{margin:0 0 12px;color:var(--muted);font-size:.9rem;}
+  header{text-align:center;margin-bottom:6px;}
+  header h1{font-size:2.1rem;font-weight:800;letter-spacing:-.03em;margin:6px 0 4px;
+    background:linear-gradient(90deg,#2f9a9a,#3a7fbf);-webkit-background-clip:text;
+    background-clip:text;color:transparent;}
+  header p{margin:0 0 14px;color:var(--muted);font-size:.94rem;}
   .tabs{display:flex;gap:6px;background:var(--panel);border:1px solid var(--line);
     border-radius:12px;padding:5px;margin-bottom:12px;}
   .tabs button{flex:1;border:0;background:transparent;padding:11px 8px;border-radius:8px;
@@ -50,8 +53,14 @@
   .info .status.sharp{background:#e2f7ef;color:var(--ok);}
   .info p{margin:0;font-size:.95rem;line-height:1.6;}
   .info p + p{margin-top:7px;color:var(--muted);}
+  .summary{margin-top:12px;border-radius:12px;padding:14px 16px;font-size:1.05rem;font-weight:700;
+    text-align:center;line-height:1.6;border:2px solid;transition:.2s;}
+  .summary.sharp{background:#e8f9f2;border-color:#1fae7a;color:#127a55;}
+  .summary.blur{background:#fdecef;border-color:#e8556b;color:#b32e44;}
+  .summary .arrow{opacity:.55;margin:0 6px;font-weight:400;}
   .foot{margin-top:14px;font-size:.76rem;color:#9db0b8;line-height:1.5;}
-  @media (max-width:520px){ header h1{font-size:1.12rem;} .seg button{font-size:.9rem;padding:11px 4px;} }
+  @media (max-width:520px){ header h1{font-size:1.5rem;} .seg button{font-size:.9rem;padding:11px 4px;}
+    .summary{font-size:.95rem;} }
 </style>
 </head>
 <body>
@@ -91,6 +100,8 @@
         <span class="slider"></span>
       </label>
     </div>
+    <div class="summary sharp" id="summary"></div>
+
     <div class="info">
       <span class="status sharp" id="statusChip">또렷함</span>
       <p id="infoMain"></p>
@@ -122,13 +133,13 @@ const SPRITE_COLORS={G:"#3fb56b",F:"#f3c9a0",K:"#2b2b3a",B:"#6b4fbf",Y:"#ffd23f"
 const D_OF={normal:2.4, myopia:3.8, hyperopia:1.55};    // 안구 길이(망막 x)
 const DNORM=2.4, DOBJ=4.0, XIN=-4.0, R_POINT=0.5, R_LENS=0.42, HOBJ=0.72, WOBJ=0.6, CORRX=-1.8;
 
-let mode="point", eye="normal", lensOn=false, lensT=0, curSharp=true;
+let mode="point", eye="normal", lensOn=false, lensT=0, curSharp=true, lastSummaryKey="";
 
 // ---- Three.js ----
 let scene,camera,renderer,glcanvas,three_ok=false;
 let eyeShell,lensMesh,screenMesh,corrLens,convexGeo,concaveGeo,concaveLabel,convexLabel,corrCap,corrOutline,concaveCS,convexCS;
 let normOutXY,normLabel,eyeOutXY,eyeLabelMyo,eyeLabelHyp,lenBar,lenLabel,lastEyeKey="";
-let blurLabel,sharpLabel;
+let blurLabel,sharpLabel,retinaLabel;
 let pSolid,pDashed,pBlurRing,pFocal;
 let objPlane,imgPlane,retinaBlurPlane,fSolid,fDashed;
 let sharpTex,blurTex;
@@ -227,7 +238,7 @@ function init3D(){
     new THREE.MeshBasicMaterial({color:0x6db3ff,transparent:true,opacity:0.42,depthWrite:false}));
   lensMesh.scale.set(0.05,0.62,0.62); scene.add(lensMesh);
   screenMesh=new THREE.Mesh(new THREE.CircleGeometry(1.05,48),
-    new THREE.MeshBasicMaterial({color:0xff7f9a,transparent:true,opacity:0.16,side:THREE.DoubleSide,depthWrite:false}));
+    new THREE.MeshBasicMaterial({color:0xff7f9a,transparent:true,opacity:0.3,side:THREE.DoubleSide,depthWrite:false}));
   screenMesh.rotation.y=Math.PI/2; scene.add(screenMesh);
 
   // --- 정상 안구 기준: 옅은 점선 윤곽 (근시/원시일 때만) ---
@@ -248,6 +259,7 @@ function init3D(){
   blurLabel=makeLabelSprite("흐리게 보임","#ff8a9a");
   sharpLabel=makeLabelSprite("선명하게 보임","#5ee8a0");
   for(const sp of [blurLabel,sharpLabel]){ sp.visible=false; scene.add(sp); }
+  retinaLabel=makeLabelSprite("망막","#ff9ab0"); scene.add(retinaLabel);
 
   // --- 늘어난/줄어든 길이 표시 ---
   lenBar=new THREE.LineSegments(new THREE.BufferGeometry(),
@@ -453,6 +465,7 @@ function update3D(){
   }
   blurLabel.position.set(Dret,1.05,0); sharpLabel.position.set(Dret,1.05,0);
   blurLabel.visible=!curSharp; sharpLabel.visible=curSharp;
+  retinaLabel.position.set(Dret,-0.78,0);
   updateCamera();
   renderer.render(scene,camera);
   updateInfo();
@@ -484,6 +497,24 @@ function updateInfo(){
     }
   }
   main.textContent=m; sub.textContent=s;
+
+  // --- 한 줄 요점 정리 ---
+  const box=document.getElementById("summary");
+  const key=mode+eye+lensOn+curSharp;
+  if(key===lastSummaryKey) return;
+  lastSummaryKey=key;
+  const A='<span class="arrow">➜</span>';
+  let cause,effect,result;
+  if(eye==="normal"){ cause="정상 안구"; effect="초점이 <u>망막에</u> 맺힘"; result="선명하게 보임"; }
+  else if(eye==="myopia"){
+    if(lensOn){ cause="근시 + <b>오목 렌즈</b>"; effect="초점을 <u>뒤로</u> 밀어 망막에 맞춤"; result="선명하게 보임"; }
+    else{ cause="근시 (안구가 <b>길다</b>)"; effect="초점이 <u>망막 앞</u>에 맺힘"; result="흐리게 보임"; }
+  }else{
+    if(lensOn){ cause="원시 + <b>볼록 렌즈</b>"; effect="초점을 <u>앞으로</u> 당겨 망막에 맞춤"; result="선명하게 보임"; }
+    else{ cause="원시 (안구가 <b>짧다</b>)"; effect="초점이 <u>망막 뒤</u>에 맺힘"; result="흐리게 보임"; }
+  }
+  box.className="summary "+(curSharp?"sharp":"blur");
+  box.innerHTML=cause+A+effect+A+result;
 }
 
 // ---- 컨트롤 ----
