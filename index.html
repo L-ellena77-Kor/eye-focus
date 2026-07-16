@@ -101,6 +101,7 @@
   <div class="foot">
     한 점 모드: 먼 곳의 한 점에서 온 여러 평행한 빛이 한 점에 모이거나 퍼집니다.
     전체 상 모드: 캐릭터의 머리끝·발끝에서 온 빛이 눈 속에 거꾸로 선 상을 만듭니다(정상=망막, 근시=망막 앞, 원시=망막 뒤).
+    근시·원시일 때는 정상 안구의 윤곽이 점선으로 겹쳐 표시됩니다.
   </div>
 </div>
 
@@ -118,14 +119,16 @@ const SPRITE=[
 const SPRITE_COLORS={G:"#3fb56b",F:"#f3c9a0",K:"#2b2b3a",B:"#6b4fbf",Y:"#ffd23f",D:"#3a4a5a"};
 
 // ---- 3D 상수 ----
-const D_OF={normal:2.4, myopia:3.0, hyperopia:1.92};  // 안구 길이(망막 x)
-const DNORM=2.4, DOBJ=4.0, XIN=-3.2, R_POINT=0.5, R_LENS=0.42, HOBJ=0.72, WOBJ=0.6, CORRX=-1.3;
+const D_OF={normal:2.4, myopia:3.8, hyperopia:1.55};    // 안구 길이(망막 x)
+const DNORM=2.4, DOBJ=4.0, XIN=-4.0, R_POINT=0.5, R_LENS=0.42, HOBJ=0.72, WOBJ=0.6, CORRX=-1.8;
 
 let mode="point", eye="normal", lensOn=false, lensT=0, curSharp=true;
 
 // ---- Three.js ----
 let scene,camera,renderer,glcanvas,three_ok=false;
-let eyeShell,lensMesh,screenMesh,corrLens,convexGeo,concaveGeo,concaveLabel,convexLabel;
+let eyeShell,lensMesh,screenMesh,corrLens,convexGeo,concaveGeo,concaveLabel,convexLabel,corrCap,corrOutline,concaveCS,convexCS;
+let normOutXY,normLabel,eyeOutXY,eyeLabelMyo,eyeLabelHyp,lenBar,lenLabel,lastEyeKey="";
+let blurLabel,sharpLabel;
 let pSolid,pDashed,pBlurRing,pFocal;
 let objPlane,imgPlane,retinaBlurPlane,fSolid,fDashed;
 let sharpTex,blurTex;
@@ -147,22 +150,51 @@ function makeBlurCanvas(src){
 function planeMat(tex,opacity){
   return new THREE.MeshBasicMaterial({map:tex,transparent:true,opacity:opacity,side:THREE.DoubleSide,depthWrite:false});
 }
-function makeLensGeometry(kind){
-  const R=1.3, N=30, pts=[];
+function lensProfile(kind){
+  const R=1.3, N=30;
   const sphereR=(depth)=>(R*R+depth*depth)/(2*depth);
   const sag=(Rs,r)=>Rs-Math.sqrt(Math.max(0,Rs*Rs-r*r));
-  if(kind==="convex"){                 // 볼록: 양쪽 구면, 가운데가 두껍고 둘레가 얇음
-    const e=0.03, T=0.62, Rs=sphereR((T-e)/2), sR=sag(Rs,R);
-    const half=r=>e/2+(sR-sag(Rs,r));
-    for(let i=0;i<=N;i++){ const r=R*i/N; pts.push(new THREE.Vector2(r, half(r))); }
-    for(let i=0;i<=N;i++){ const r=R*(1-i/N); pts.push(new THREE.Vector2(r, -half(r))); }
-  }else{                                // 오목: 한쪽은 평면, 다른 쪽은 구면으로 파임 (실제 근시 안경알)
-    const c=0.03, E=0.62, Rs=sphereR(E-c);
-    const th=r=>c+sag(Rs,r);
-    for(let i=0;i<=N;i++){ const r=R*i/N; pts.push(new THREE.Vector2(r, E/2)); }            // 평평한 면
-    for(let i=0;i<=N;i++){ const r=R*(1-i/N); pts.push(new THREE.Vector2(r, E/2-th(r))); }  // 구면으로 파인 면
+  if(kind==="convex"){ const e=0.03,T=0.62,Rs=sphereR((T-e)/2),sR=sag(Rs,R);
+    return {R,N,kind,half:r=>e/2+(sR-sag(Rs,r))};
+  }
+  const c=0.03,E=0.62,Rs=sphereR(E-c);
+  return {R,N,kind,E,th:r=>c+sag(Rs,r)};
+}
+function makeLensGeometry(kind){
+  const p=lensProfile(kind), pts=[];
+  if(kind==="convex"){
+    for(let i=0;i<=p.N;i++){ const r=p.R*i/p.N; pts.push(new THREE.Vector2(r, p.half(r))); }
+    for(let i=0;i<=p.N;i++){ const r=p.R*(1-i/p.N); pts.push(new THREE.Vector2(r, -p.half(r))); }
+  }else{
+    for(let i=0;i<=p.N;i++){ const r=p.R*i/p.N; pts.push(new THREE.Vector2(r, p.E/2)); }
+    for(let i=0;i<=p.N;i++){ const r=p.R*(1-i/p.N); pts.push(new THREE.Vector2(r, p.E/2-p.th(r))); }
   }
   return new THREE.LatheGeometry(pts, 64);
+}
+// 옆에서 볼 때 가운데 파인 곳이 보이도록, z=0 단면을 따로 만든다
+function lensCrossSection(kind){
+  const p=lensProfile(kind), N=p.N, R=p.R, v=[];
+  if(kind==="convex"){
+    for(let i=0;i<=2*N;i++){ const r=-R+2*R*i/(2*N); v.push([ p.half(Math.abs(r)), r]); }
+    for(let i=0;i<=2*N;i++){ const r=R-2*R*i/(2*N); v.push([-p.half(Math.abs(r)), r]); }
+  }else{
+    v.push([-p.E/2, -R]); v.push([-p.E/2, R]);                                  // 평평한 면
+    for(let i=0;i<=2*N;i++){ const r=R-2*R*i/(2*N); v.push([p.th(Math.abs(r))-p.E/2, r]); }  // 파인 면
+  }
+  const sh=new THREE.Shape();
+  sh.moveTo(v[0][0],v[0][1]);
+  for(let i=1;i<v.length;i++) sh.lineTo(v[i][0],v[i][1]);
+  sh.closePath();
+  const line=v.map(q=>new THREE.Vector3(q[0],q[1],0));
+  return {geo:new THREE.ShapeGeometry(sh), lineGeo:new THREE.BufferGeometry().setFromPoints(line)};
+}
+function ellipsePts(cx,rx,ry,plane,n=96){
+  const p=[];
+  for(let i=0;i<n;i++){ const t=i/n*Math.PI*2;
+    p.push(plane==="xy" ? new THREE.Vector3(cx+rx*Math.cos(t), ry*Math.sin(t), 0)
+                        : new THREE.Vector3(cx+rx*Math.cos(t), 0, ry*Math.sin(t)));
+  }
+  return p;
 }
 function makeLabelSprite(text,color){
   const c=document.createElement("canvas"); c.width=256; c.height=64;
@@ -189,7 +221,7 @@ function init3D(){
 
   // 공통: 눈알 / 수정체 / 망막 스크린 / 축 / 교정 렌즈
   eyeShell=new THREE.Mesh(new THREE.SphereGeometry(1,40,28),
-    new THREE.MeshBasicMaterial({color:0x63c7c7,transparent:true,opacity:0.10,side:THREE.DoubleSide,depthWrite:false}));
+    new THREE.MeshBasicMaterial({color:0x63c7c7,transparent:true,opacity:0.16,side:THREE.DoubleSide,depthWrite:false}));
   scene.add(eyeShell);
   lensMesh=new THREE.Mesh(new THREE.SphereGeometry(1,28,20),
     new THREE.MeshBasicMaterial({color:0x6db3ff,transparent:true,opacity:0.42,depthWrite:false}));
@@ -197,14 +229,45 @@ function init3D(){
   screenMesh=new THREE.Mesh(new THREE.CircleGeometry(1.05,48),
     new THREE.MeshBasicMaterial({color:0xff7f9a,transparent:true,opacity:0.16,side:THREE.DoubleSide,depthWrite:false}));
   screenMesh.rotation.y=Math.PI/2; scene.add(screenMesh);
+
+  // --- 정상 안구 기준: 옅은 점선 윤곽 (근시/원시일 때만) ---
+  normOutXY=new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(ellipsePts(DNORM/2,DNORM/2+0.4,1.35,"xy")),
+    new THREE.LineDashedMaterial({color:0xa9c6d2,dashSize:0.13,gapSize:0.1,transparent:true,opacity:0.8}));
+  normOutXY.computeLineDistances(); normOutXY.frustumCulled=false; scene.add(normOutXY);
+  normLabel=makeLabelSprite("정상 안구","#a9c6d2");
+  normLabel.position.set(DNORM/2,-1.62,0); normLabel.visible=false; scene.add(normLabel);
+
+  // --- 실제 안구 외곽: 밝은 실선 (항상) ---
+  eyeOutXY=new THREE.LineLoop(new THREE.BufferGeometry(),
+    new THREE.LineBasicMaterial({color:0x5fe8e8,transparent:true,opacity:0.95}));
+  eyeOutXY.frustumCulled=false; scene.add(eyeOutXY);
+  eyeLabelMyo=makeLabelSprite("길어진 안구","#5fe8e8"); eyeLabelHyp=makeLabelSprite("짧아진 안구","#5fe8e8");
+  for(const sp of [eyeLabelMyo,eyeLabelHyp]){ sp.visible=false; scene.add(sp); }
+
+  // --- 망막에서 흐린지/선명한지 글로 표시 ---
+  blurLabel=makeLabelSprite("흐리게 보임","#ff8a9a");
+  sharpLabel=makeLabelSprite("선명하게 보임","#5ee8a0");
+  for(const sp of [blurLabel,sharpLabel]){ sp.visible=false; scene.add(sp); }
+
+  // --- 늘어난/줄어든 길이 표시 ---
+  lenBar=new THREE.LineSegments(new THREE.BufferGeometry(),
+    new THREE.LineBasicMaterial({color:0xffb24d,transparent:true,opacity:0.95}));
+  lenBar.frustumCulled=false; scene.add(lenBar);
+  lenLabel=makeLabelSprite("길이 차이","#ffb24d"); lenLabel.visible=false; scene.add(lenLabel);
   scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(
     [new THREE.Vector3(-4.4,0,0),new THREE.Vector3(4.2,0,0)]),
     new THREE.LineBasicMaterial({color:0x2b4a55})));
   scene.add(new THREE.AmbientLight(0xffffff,0.8));
   const dl=new THREE.DirectionalLight(0xffffff,0.7); dl.position.set(-3,4,5); scene.add(dl);
   convexGeo=makeLensGeometry("convex"); concaveGeo=makeLensGeometry("concave");
-  corrLens=new THREE.Mesh(convexGeo, new THREE.MeshPhongMaterial({color:0x9ad4ff,transparent:true,opacity:0.7,shininess:90,specular:0x88aabb,side:THREE.DoubleSide,depthWrite:false}));
+  corrLens=new THREE.Mesh(convexGeo, new THREE.MeshPhongMaterial({color:0x9ad4ff,transparent:true,opacity:0.22,shininess:90,specular:0x88aabb,side:THREE.DoubleSide,depthWrite:false}));
   corrLens.rotation.z=Math.PI/2; corrLens.position.x=CORRX; corrLens.frustumCulled=false; scene.add(corrLens);
+  // 단면(잘린 면): 옆에서 볼 때 가운데 파인 모습이 그대로 보이도록
+  concaveCS=lensCrossSection("concave"); convexCS=lensCrossSection("convex");
+  corrCap=new THREE.Mesh(convexCS.geo, new THREE.MeshBasicMaterial({color:0x7ec8ff,transparent:true,opacity:0.62,side:THREE.DoubleSide,depthWrite:false}));
+  corrCap.position.x=CORRX; corrCap.frustumCulled=false; scene.add(corrCap);
+  corrOutline=new THREE.LineLoop(convexCS.lineGeo, new THREE.LineBasicMaterial({color:0xdff0ff,transparent:true,opacity:0.95}));
+  corrOutline.position.x=CORRX; corrOutline.frustumCulled=false; scene.add(corrOutline);
   concaveLabel=makeLabelSprite("오목 렌즈","#9ad4ff"); convexLabel=makeLabelSprite("볼록 렌즈","#9ad4ff");
   for(const sp of [concaveLabel,convexLabel]){ sp.position.set(CORRX,1.62,0); sp.visible=false; scene.add(sp); }
 
@@ -270,23 +333,36 @@ function updateCamera(){
 
 // ---- 점 모드 ----
 function updatePoint(Dret){
-  const f=1/((1-lensT)/DNORM + lensT/Dret);
+  const Feye=DNORM;
+  const PcFull=(eye==="normal")?0:1/(1/(1/Dret-1/Feye)-CORRX);
+  const Pc=lensT*PcFull, hasG=Math.abs(Pc)>1e-9;
+  // 단위 광선(높이 1, 평행)으로 계 전체를 추적 -> 선형이므로 모든 광선에 비례 적용
+  let y=1,u=0,x=XIN;
+  if(hasG){ y+=u*(CORRX-x); x=CORRX; u-=y*Pc; }   // 안경에서 굴절
+  y+=u*(0-x); x=0; const yl=y;                      // 수정체 도달 높이
+  u-=y/Feye;                                        // 수정체에서 굴절
+  const f=-y/u, yr=yl+u*Dret;
   const front=f<Dret-0.02, behind=f>Dret+0.02; curSharp=!front&&!behind;
+
   const solid=[], dashed=[];
   const pushRay=(rad,th)=>{
-    const c=Math.cos(th), s=Math.sin(th), rr=rad*(1-Dret/f);
-    const p0=[XIN,rad*c,rad*s], pL=[0,rad*c,rad*s], pF=[f,0,0], pR=[Dret,rr*c,rr*s];
-    solid.push(p0[0],p0[1],p0[2], pL[0],pL[1],pL[2]);           // 평행 입사(축과 나란)
-    if(front){ solid.push(pL[0],pL[1],pL[2], pF[0],pF[1],pF[2], pF[0],pF[1],pF[2], pR[0],pR[1],pR[2]); }
-    else if(behind){ solid.push(pL[0],pL[1],pL[2], pR[0],pR[1],pR[2]); dashed.push(pR[0],pR[1],pR[2], pF[0],pF[1],pF[2]); }
-    else { solid.push(pL[0],pL[1],pL[2], pR[0],pR[1],pR[2]); }
+    const c=Math.cos(th), s=Math.sin(th);
+    const P0=[XIN,rad*c,rad*s], Pg=[CORRX,rad*c,rad*s];
+    const Pl=[0,rad*yl*c,rad*yl*s], Pf=[f,0,0], Pr=[Dret,rad*yr*c,rad*yr*s];
+    if(hasG){ solid.push(P0[0],P0[1],P0[2], Pg[0],Pg[1],Pg[2]);      // 평행 입사
+              solid.push(Pg[0],Pg[1],Pg[2], Pl[0],Pl[1],Pl[2]); }    // 안경에서 꺾인 뒤
+    else    { solid.push(P0[0],P0[1],P0[2], Pl[0],Pl[1],Pl[2]); }
+    if(front){ solid.push(Pl[0],Pl[1],Pl[2], Pf[0],Pf[1],Pf[2], Pf[0],Pf[1],Pf[2], Pr[0],Pr[1],Pr[2]); }
+    else if(behind){ solid.push(Pl[0],Pl[1],Pl[2], Pr[0],Pr[1],Pr[2]); dashed.push(Pr[0],Pr[1],Pr[2], Pf[0],Pf[1],Pf[2]); }
+    else { solid.push(Pl[0],Pl[1],Pl[2], Pr[0],Pr[1],Pr[2]); }
   };
-  const rings=[[R_POINT,22],[R_POINT*0.62,10]];   // 바깥 고리 + 안쪽 고리
+  const rings=[[R_POINT,22],[R_POINT*0.62,10]];
   for(const rg of rings){ for(let i=0;i<rg[1];i++) pushRay(rg[0], i/rg[1]*Math.PI*2); }
-  pushRay(0,0);                                    // 중심(축) 광선
+  pushRay(0,0);
   setSeg(pSolid,solid); setSeg(pDashed,dashed);
+
   if(curSharp){ pBlurRing.visible=false; }
-  else{ const br=Math.max(Math.abs(R_POINT*(1-Dret/f)),0.001);
+  else{ const br=Math.max(Math.abs(R_POINT*yr),0.001);
     pBlurRing.geometry.dispose(); pBlurRing.geometry=new THREE.TorusGeometry(br,0.028,10,64);
     pBlurRing.position.x=Dret; pBlurRing.visible=true; }
   pFocal.position.set(f,0,0); pFocal.material.color.set(curSharp?0x39d98a:(front?0xffc24d:0xff6a7a)); pFocal.visible=true;
@@ -294,26 +370,41 @@ function updatePoint(Dret){
 
 // ---- 전체 상 모드 ----
 function updateFull(Dret){
-  const ximg=(1-lensT)*DNORM + lensT*Dret;
-  const m=ximg/DOBJ;
+  const Feye=1/(1/DNORM+1/DOBJ), u1=-DOBJ-CORRX;
+  let PcFull=0;
+  if(eye!=="normal"){ const u2n=1/(1/Dret-1/Feye); PcFull=1/(u2n-CORRX)-1/u1; }
+  const Pc=lensT*PcFull, hasG=Math.abs(Pc)>1e-9;
+  let u2, Mg=1;
+  if(hasG){ const v1=1/(Pc+1/u1); u2=CORRX+v1; Mg=v1/u1; } else { u2=-DOBJ; }
+  const ximg=1/(1/Feye+1/u2), M=(ximg/u2)*Mg, mm=Math.abs(M);
   const behind=ximg>Dret+0.02, front=ximg<Dret-0.02; curSharp=!behind&&!front;
 
   objPlane.position.set(-DOBJ,0,0); objPlane.scale.set(WOBJ*2, HOBJ*2, 1); objPlane.visible=true;
-  imgPlane.position.set(ximg,0,0); imgPlane.scale.set(WOBJ*2*m, -(HOBJ*2*m), 1);
+  imgPlane.position.set(ximg,0,0); imgPlane.scale.set(WOBJ*2*mm, -(HOBJ*2*mm), 1);
   imgPlane.material.opacity=behind?0.5:0.95; imgPlane.visible=true;
   if(curSharp){ retinaBlurPlane.visible=false; }
   else{ const bs=1.3; retinaBlurPlane.position.set(Dret,0,0);
-    retinaBlurPlane.scale.set(WOBJ*2*m*bs, -(HOBJ*2*m*bs), 1); retinaBlurPlane.visible=true; }
+    retinaBlurPlane.scale.set(WOBJ*2*mm*bs, -(HOBJ*2*mm*bs), 1); retinaBlurPlane.visible=true; }
 
-  const solid=[], dashed=[], NL=12, R=R_LENS, Ho=HOBJ, t=Dret/ximg;
-  const pts=[{oy:+Ho, iy:-m*Ho},{oy:-Ho, iy:+m*Ho}];
-  for(const p of pts){
-    const O=[-DOBJ,p.oy,0], I=[ximg,p.iy,0];
-    for(let k=0;k<NL;k++){
-      const ph=k/NL*Math.PI*2, Lp=[0,R*Math.cos(ph),R*Math.sin(ph)];
-      const Rp=[Lp[0]+t*(I[0]-Lp[0]), Lp[1]+t*(I[1]-Lp[1]), Lp[2]+t*(I[2]-Lp[2])];
-      solid.push(O[0],O[1],O[2], Lp[0],Lp[1],Lp[2], Lp[0],Lp[1],Lp[2], Rp[0],Rp[1],Rp[2]);
-      if(behind) dashed.push(Rp[0],Rp[1],Rp[2], I[0],I[1],I[2]);
+  const a=CORRX+DOBJ, k=1+Pc*CORRX, den=a*k-CORRX;
+  const solid=[], dashed=[], NL=10;
+  for(const ho of [HOBJ,-HOBJ]){
+    for(let i=0;i<NL;i++){
+      const ph=i/NL*Math.PI*2, ty=R_LENS*Math.cos(ph), tz=R_LENS*Math.sin(ph);
+      let uy=(ty-ho*k)/den, uz=tz/den;
+      let x=-DOBJ, y=ho, z=0;
+      if(hasG){                                   // 안경에서 굴절
+        const yg=y+uy*a, zg=z+uz*a;
+        solid.push(x,y,z, CORRX,yg,zg);
+        y=yg; z=zg; x=CORRX; uy-=y*Pc; uz-=z*Pc;
+      }
+      const yl=y+uy*(0-x), zl=z+uz*(0-x);
+      solid.push(x,y,z, 0,yl,zl);
+      y=yl; z=zl; x=0; uy-=y/Feye; uz-=z/Feye;    // 수정체에서 굴절
+      const yR=y+uy*Dret, zR=z+uz*Dret, yI=y+uy*ximg, zI=z+uz*ximg;
+      if(behind){ solid.push(0,y,z, Dret,yR,zR); dashed.push(Dret,yR,zR, ximg,yI,zI); }
+      else if(front){ solid.push(0,y,z, ximg,yI,zI, ximg,yI,zI, Dret,yR,zR); }
+      else { solid.push(0,y,z, Dret,yR,zR); }
     }
   }
   setSeg(fSolid,solid); setSeg(fDashed,dashed);
@@ -324,12 +415,33 @@ function update3D(){
   const Dret=D_OF[eye];
   eyeShell.scale.set(Dret/2+0.4,1.35,1.35); eyeShell.position.x=Dret/2;
   screenMesh.position.x=Dret;
-  const showLens=(eye!=="normal") && lensT>0.02;
-  corrLens.visible=showLens;
-  if(showLens){ corrLens.geometry=(eye==="myopia")?concaveGeo:convexGeo;
-    corrLens.material.opacity=clamp(lensT*0.75,0,0.75); }
-  concaveLabel.visible=showLens && eye==="myopia";
-  convexLabel.visible=showLens && eye==="hyperopia";
+  const abn=(eye!=="normal");
+  normOutXY.visible=normLabel.visible=abn;
+  lenBar.visible=lenLabel.visible=abn;
+  eyeLabelMyo.visible=(eye==="myopia"); eyeLabelHyp.visible=(eye==="hyperopia");
+  if(lastEyeKey!==eye){
+    lastEyeKey=eye;
+    const rx=Dret/2+0.4, cx=Dret/2;
+    eyeOutXY.geometry.dispose(); eyeOutXY.geometry=new THREE.BufferGeometry().setFromPoints(ellipsePts(cx,rx,1.35,"xy"));
+    eyeLabelMyo.position.set(cx,1.62,0); eyeLabelHyp.position.set(cx,1.62,0);
+    // 정상 망막(DNORM)과 실제 망막(Dret) 사이를 막대로 표시
+    const yb=-1.15, a=Math.min(DNORM,Dret), b=Math.max(DNORM,Dret);
+    const seg=[a,yb,0, b,yb,0, a,yb-0.12,0, a,yb+0.12,0, b,yb-0.12,0, b,yb+0.12,0];
+    lenBar.geometry.dispose(); lenBar.geometry=new THREE.BufferGeometry().setAttribute("position",new THREE.Float32BufferAttribute(seg,3));
+    lenLabel.position.set((a+b)/2, yb-0.34, 0);
+  }
+  const showLens=(eye!=="normal") && lensT>0.02, myo=(eye==="myopia");
+  corrLens.visible=corrCap.visible=corrOutline.visible=showLens;
+  if(showLens){
+    corrLens.geometry=myo?concaveGeo:convexGeo;
+    corrCap.geometry=(myo?concaveCS:convexCS).geo;
+    corrOutline.geometry=(myo?concaveCS:convexCS).lineGeo;
+    corrLens.material.opacity=clamp(lensT*0.24,0,0.24);
+    corrCap.material.opacity=clamp(lensT*0.62,0,0.62);
+    corrOutline.material.opacity=clamp(lensT,0,1);
+  }
+  concaveLabel.visible=showLens && myo;
+  convexLabel.visible=showLens && !myo;
 
   if(mode==="point"){
     objPlane.visible=imgPlane.visible=retinaBlurPlane.visible=false;
@@ -339,6 +451,8 @@ function update3D(){
     pSolid.visible=pDashed.visible=pBlurRing.visible=pFocal.visible=false;
     updateFull(Dret);
   }
+  blurLabel.position.set(Dret,1.05,0); sharpLabel.position.set(Dret,1.05,0);
+  blurLabel.visible=!curSharp; sharpLabel.visible=curSharp;
   updateCamera();
   renderer.render(scene,camera);
   updateInfo();
@@ -353,10 +467,10 @@ function updateInfo(){
   if(mode==="point"){
     if(eye==="normal"){ m="정상 눈: 먼 곳 한 점에서 온 평행한 빛이 망막의 한 점으로 정확히 모입니다."; s="빛이 한 점에 모여 또렷합니다."; }
     else if(eye==="myopia"){
-      if(lensOn){ m="오목 렌즈로 교정: 초점을 뒤로 밀어 망막의 한 점에 모읍니다."; s="퍼지던 빛이 다시 한 점으로 모입니다."; }
+      if(lensOn){ m="오목 렌즈로 교정: 빛이 렌즈의 두꺼운 둘레 쪽(바깥)으로 꺾여 퍼진 뒤, 초점이 뒤로 밀려 망막의 한 점에 모입니다."; s="오목 렌즈는 가운데가 얇아 빛을 퍼뜨립니다."; }
       else{ m="근시: 초점이 망막 앞에 맺히고, 망막에서는 빛이 고리처럼 퍼집니다. 안구가 길기 때문입니다."; s="오목 렌즈로 초점을 뒤로 밀면 한 점이 됩니다."; }
     }else{
-      if(lensOn){ m="볼록 렌즈로 교정: 초점을 앞으로 당겨 망막의 한 점에 모읍니다."; s="퍼지던 빛이 다시 한 점으로 모입니다."; }
+      if(lensOn){ m="볼록 렌즈로 교정: 빛이 렌즈의 두꺼운 가운데 쪽(안쪽)으로 꺾여 모인 뒤, 초점이 앞으로 당겨져 망막의 한 점에 모입니다."; s="볼록 렌즈는 가운데가 두꺼워 빛을 모읍니다."; }
       else{ m="원시: 초점이 망막 뒤(점선으로 연장)에 맺히려 해, 망막에서는 빛이 고리처럼 퍼집니다. 안구가 짧기 때문입니다."; s="볼록 렌즈로 초점을 앞으로 당기면 한 점이 됩니다."; }
     }
   }else{
